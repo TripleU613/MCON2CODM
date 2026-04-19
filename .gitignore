@@ -1,0 +1,37 @@
+# ---------- Android / Gradle ----------
+.gradle/
+build/
+out/
+/build/
+/app/build/
+local.properties
+.idea/
+*.iml
+.cxx/
+release/
+/captures/
+
+# ---------- Keystore & secrets — NEVER commit ----------
+*.jks
+*.keystore
+*.p12
+/key/
+/keys/
+/secrets/
+google-services.json
+keystore.properties
+signing.properties
+
+# ---------- Kotlin / JVM ----------
+*.class
+*.log
+hs_err_pid*
+
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+
+# ---------- Misc ----------
+*.swp
+*.swo
+/mcon_bridge
