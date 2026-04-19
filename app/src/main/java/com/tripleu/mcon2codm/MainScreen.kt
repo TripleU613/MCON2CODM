@@ -518,7 +518,7 @@ private fun PairingOnboarding(
                 number = 2,
                 active = activeStep == 2,
                 title = "Tap ‘Pair device with pairing code’",
-                subtitle = "A 6-digit code will appear on that screen",
+                subtitle = "A 6-digit code will appear. Tip: put this screen in split-screen with MCON2CODM so IP and port auto-detect — highly recommended.",
                 onClick = { activeStep = 2 },
             )
 
