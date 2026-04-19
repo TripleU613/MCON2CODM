@@ -17,7 +17,7 @@ Grab the APK from the [Releases](../../releases) page and install it.
 Open the app and follow the three steps:
 
 1. **Turn on Wireless Debugging**
-   Settings → System → Developer options → Wireless debugging → enable. You can also make a split screen with pairing screen so iIP and PORT auto detect. 
+   Settings → System → Developer options → Wireless debugging → enable. You can also make a split screen with pairing screen so IP and PORT auto detect. 
 
 2. **Tap "Pair device with pairing code"**
    A 6-digit code appears.
