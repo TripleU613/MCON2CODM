@@ -37,7 +37,6 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothDisabled
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mouse
@@ -87,7 +86,6 @@ fun MainScreen() {
     var pairingCode by rememberSaveable { mutableStateOf("") }
     var pairingBusy by remember { mutableStateOf(false) }
     var pairingError by rememberSaveable { mutableStateOf<String?>(null) }
-    var pairingDismissed by rememberSaveable { mutableStateOf(false) }
 
     // Persist selection.
     LaunchedEffect(selected) { prefs.lastSelectedPath = selected }
@@ -321,7 +319,7 @@ fun MainScreen() {
 
             item(key = "pairing") {
                 AnimatedVisibility(
-                    visible = backend == BridgeRunner.Backend.NONE && !pairingDismissed,
+                    visible = backend == BridgeRunner.Backend.NONE,
                     enter = fadeIn() + expandVertically(),
                     exit = fadeOut() + shrinkVertically(),
                 ) {
@@ -330,12 +328,13 @@ fun MainScreen() {
                         onCodeChange = { pairingCode = it },
                         busy = pairingBusy,
                         error = pairingError,
-                        onDismiss = { pairingDismissed = true },
-                        onPair = {
+                        onPair = { host, port ->
                             pairingBusy = true; pairingError = null
                             scope.launch {
-                                val result = AdbConnectionManager.get(ctx)
-                                    .pairAuto(ctx, pairingCode)
+                                val result = withContext(Dispatchers.IO) {
+                                    AdbConnectionManager.get(ctx)
+                                        .pairOnce(host, port, pairingCode)
+                                }
                                 pairingBusy = false
                                 result.onSuccess {
                                     pairingCode = ""; pairingError = null
@@ -479,14 +478,17 @@ private fun PairingOnboarding(
     onCodeChange: (String) -> Unit,
     busy: Boolean,
     error: String?,
-    onPair: () -> Unit,
-    onDismiss: () -> Unit,
+    onPair: (host: String, port: Int) -> Unit,
 ) {
     val ctx = LocalContext.current
-    val detected by AdbDiscovery.pairingPortFlow(ctx)
-        .collectAsState(initial = null)
+    val detected by AdbDiscovery.pairingPortFlow(ctx).collectAsState(initial = null)
 
-    val pairingLive = detected != null
+    // Which step the user has tapped — lights that row up.
+    // Null = nothing selected yet.
+    var activeStep by rememberSaveable { mutableStateOf<Int?>(null) }
+    // Manual host/port fallback if mDNS can't find the pairing service.
+    var manualHost by rememberSaveable { mutableStateOf("") }
+    var manualPort by rememberSaveable { mutableStateOf("") }
 
     Card(
         colors = CardDefaults.cardColors(
@@ -496,48 +498,39 @@ private fun PairingOnboarding(
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "Set up Wireless Debugging",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.size(28.dp),
-                ) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = "Dismiss",
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+            Text(
+                "Set up Wireless Debugging",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
 
             StepRow(
                 number = 1,
+                active = activeStep == 1,
                 title = "Turn on Wireless Debugging",
                 subtitle = "Settings → System → Developer options → Wireless debugging",
+                onClick = { activeStep = 1 },
             )
 
             StepRow(
                 number = 2,
+                active = activeStep == 2,
                 title = "Tap ‘Pair device with pairing code’",
-                subtitle = if (pairingLive) "Pairing service detected"
-                           else "A 6-digit code will appear",
+                subtitle = "A 6-digit code will appear on that screen",
+                onClick = { activeStep = 2 },
             )
 
             StepRow(
                 number = 3,
-                title = "Enter the 6-digit code below",
-                subtitle = "Then tap Pair",
+                active = activeStep == 3,
+                title = "Enter the 6-digit code",
+                subtitle = if (activeStep == 3) "Type the code, then Pair"
+                           else "Tap to enter code",
+                onClick = { activeStep = 3 },
             ) {
+                // Only rendered when step 3 is active (see StepRow logic).
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = code,
@@ -548,13 +541,47 @@ private fun PairingOnboarding(
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !busy,
                     )
-                    error?.let {
-                        Text(it, color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall)
+                    // Show IP/Port fields only when mDNS can't detect them.
+                    if (detected == null) {
+                        Text(
+                            "Can't auto-detect the pairing service. Enter the IP and port shown on the pairing screen:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = manualHost,
+                                onValueChange = { manualHost = it.trim() },
+                                label = { Text("IP") },
+                                placeholder = { Text("192.168.x.x") },
+                                singleLine = true,
+                                modifier = Modifier.weight(2f),
+                                enabled = !busy,
+                            )
+                            OutlinedTextField(
+                                value = manualPort,
+                                onValueChange = { manualPort = it.filter { c -> c.isDigit() }.take(5) },
+                                label = { Text("Port") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f),
+                                enabled = !busy,
+                            )
+                        }
                     }
+                    error?.let {
+                        Text(
+                            it, color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    val host = detected?.host?.hostAddress ?: manualHost.ifBlank { "127.0.0.1" }
+                    val port = detected?.port ?: manualPort.toIntOrNull() ?: 0
+                    val canPair = !busy && code.length == 6 &&
+                                  (detected != null || manualPort.toIntOrNull() != null)
                     Button(
-                        onClick = onPair,
-                        enabled = !busy && code.length == 6,
+                        onClick = { onPair(host, port) },
+                        enabled = canPair,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         if (busy) {
@@ -579,44 +606,71 @@ private fun PairingOnboarding(
 @Composable
 private fun StepRow(
     number: Int,
+    active: Boolean,
     title: String,
     subtitle: String,
+    onClick: () -> Unit,
     action: @Composable (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Surface(
-            modifier = Modifier.size(28.dp),
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    "$number",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            }
-        }
+    val rowBg = if (active) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surface
+    val indicatorBg = if (active) MaterialTheme.colorScheme.primary
+                     else MaterialTheme.colorScheme.surface
+    val indicatorFg = if (active) MaterialTheme.colorScheme.onPrimary
+                     else MaterialTheme.colorScheme.onSurfaceVariant
+    val titleColor = if (active) MaterialTheme.colorScheme.onPrimaryContainer
+                     else MaterialTheme.colorScheme.onSurface
+    val subtitleColor = if (active) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
+                        else MaterialTheme.colorScheme.onSurfaceVariant
 
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+    Surface(
+        color = rowBg,
+        shape = RoundedCornerShape(14.dp),
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        border = if (active) null
+                 else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                title,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-            )
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            action?.invoke()
+            Surface(
+                modifier = Modifier.size(28.dp),
+                shape = CircleShape,
+                color = indicatorBg,
+                border = if (active) null
+                         else BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        "$number",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = indicatorFg,
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = titleColor,
+                )
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = subtitleColor,
+                )
+                if (active && action != null) {
+                    action()
+                }
+            }
         }
     }
 }
