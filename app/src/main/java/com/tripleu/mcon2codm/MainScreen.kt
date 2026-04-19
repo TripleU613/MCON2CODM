@@ -821,6 +821,12 @@ private fun InfoDialog(onDismiss: () -> Unit) {
                     "Wireless Debugging to get that access — no extra apps needed.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                Text(
+                    "Important: after tapping Spoof, fully close Call of Duty Mobile " +
+                    "and reopen it. CODM only detects controllers at launch.",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                )
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },

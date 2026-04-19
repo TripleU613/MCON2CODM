@@ -35,4 +35,7 @@ Done. Future launches skip this.
 3. Tap it → tap **Spoof**.
 4. Launch your game. Controller works as Xbox.
 
+> ⚠️ **If Call of Duty Mobile is already running, fully close it and reopen it after
+> tapping Spoof.** CODM only detects controllers at launch.
+
 Tap **Stop** (or the notification) when you're done.
