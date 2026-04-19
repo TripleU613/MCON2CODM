@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothDisabled
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mouse
@@ -86,6 +87,7 @@ fun MainScreen() {
     var pairingCode by rememberSaveable { mutableStateOf("") }
     var pairingBusy by remember { mutableStateOf(false) }
     var pairingError by rememberSaveable { mutableStateOf<String?>(null) }
+    var pairingDismissed by rememberSaveable { mutableStateOf(false) }
 
     // Persist selection.
     LaunchedEffect(selected) { prefs.lastSelectedPath = selected }
@@ -319,7 +321,7 @@ fun MainScreen() {
 
             item(key = "pairing") {
                 AnimatedVisibility(
-                    visible = backend == BridgeRunner.Backend.NONE,
+                    visible = backend == BridgeRunner.Backend.NONE && !pairingDismissed,
                     enter = fadeIn() + expandVertically(),
                     exit = fadeOut() + shrinkVertically(),
                 ) {
@@ -328,7 +330,7 @@ fun MainScreen() {
                         onCodeChange = { pairingCode = it },
                         busy = pairingBusy,
                         error = pairingError,
-                        onOpenWireless = { openWirelessDebugging(ctx) },
+                        onDismiss = { pairingDismissed = true },
                         onPair = {
                             pairingBusy = true; pairingError = null
                             scope.launch {
@@ -470,8 +472,6 @@ private fun BackendChip(backend: BridgeRunner.Backend) {
 // enters the 6-digit code.
 // ---------------------------------------------------------------------------
 
-private enum class StepState { Pending, Active, Done }
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PairingOnboarding(
@@ -479,26 +479,14 @@ private fun PairingOnboarding(
     onCodeChange: (String) -> Unit,
     busy: Boolean,
     error: String?,
-    onOpenWireless: () -> Unit,
     onPair: () -> Unit,
+    onDismiss: () -> Unit,
 ) {
     val ctx = LocalContext.current
     val detected by AdbDiscovery.pairingPortFlow(ctx)
         .collectAsState(initial = null)
 
-    // Step 2 becomes "Done" once mDNS finds the pairing service. When it does,
-    // we assume Wireless Debugging is enabled (step 1 complete) and the user
-    // is on the pairing screen (step 2 active).
     val pairingLive = detected != null
-    val step1 = if (pairingLive) StepState.Done else StepState.Active
-    val step2 = when {
-        pairingLive -> StepState.Active
-        else -> StepState.Pending
-    }
-    val step3 = when {
-        pairingLive -> StepState.Active
-        else -> StepState.Pending
-    }
 
     Card(
         colors = CardDefaults.cardColors(
@@ -510,34 +498,45 @@ private fun PairingOnboarding(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(
-                "Set up Wireless Debugging",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-
-            StepRow(
-                number = 1,
-                state = step1,
-                title = "Turn on Wireless Debugging",
-                subtitle = "Opens Android's Developer Options",
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                FilledTonalButton(onClick = onOpenWireless) { Text("Open Settings") }
+                Text(
+                    "Set up Wireless Debugging",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Dismiss",
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             StepRow(
+                number = 1,
+                title = "Turn on Wireless Debugging",
+                subtitle = "Settings → System → Developer options → Wireless debugging",
+            )
+
+            StepRow(
                 number = 2,
-                state = step2,
                 title = "Tap ‘Pair device with pairing code’",
                 subtitle = if (pairingLive) "Pairing service detected"
-                           else "Waiting for pairing screen…",
+                           else "A 6-digit code will appear",
             )
 
             StepRow(
                 number = 3,
-                state = step3,
-                title = "Enter the 6-digit code",
-                subtitle = "Shown on that same pairing screen",
+                title = "Enter the 6-digit code below",
+                subtitle = "Then tap Pair",
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
@@ -547,7 +546,7 @@ private fun PairingOnboarding(
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !busy && pairingLive,
+                        enabled = !busy,
                     )
                     error?.let {
                         Text(it, color = MaterialTheme.colorScheme.error,
@@ -555,7 +554,7 @@ private fun PairingOnboarding(
                     }
                     Button(
                         onClick = onPair,
-                        enabled = !busy && code.length == 6 && pairingLive,
+                        enabled = !busy && code.length == 6,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         if (busy) {
@@ -580,54 +579,31 @@ private fun PairingOnboarding(
 @Composable
 private fun StepRow(
     number: Int,
-    state: StepState,
     title: String,
     subtitle: String,
     action: @Composable (() -> Unit)? = null,
 ) {
-    val alpha = if (state == StepState.Pending) 0.55f else 1f
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Step indicator
         Surface(
             modifier = Modifier.size(28.dp),
             shape = CircleShape,
-            color = when (state) {
-                StepState.Done -> MaterialTheme.colorScheme.primary
-                StepState.Active -> MaterialTheme.colorScheme.primaryContainer
-                StepState.Pending -> MaterialTheme.colorScheme.surface
-            },
-            border = if (state == StepState.Pending)
-                BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-            else null,
+            color = MaterialTheme.colorScheme.primaryContainer,
         ) {
             Box(contentAlignment = Alignment.Center) {
-                if (state == StepState.Done) {
-                    Icon(
-                        Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                } else {
-                    Text(
-                        "$number",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (state == StepState.Active)
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                Text(
+                    "$number",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
             }
         }
 
         Column(
-            modifier = Modifier
-                .weight(1f)
-                .alpha(alpha),
+            modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
@@ -640,9 +616,7 @@ private fun StepRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (action != null && state == StepState.Active) {
-                action()
-            }
+            action?.invoke()
         }
     }
 }
